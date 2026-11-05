@@ -1,0 +1,6 @@
+# dsh-media-studio bundle patch: insert one Host plugin row.
+- insert:
+    - id: dsh-media-studio
+      name: dsh-media-studio
+      config:
+        dataDir: !!js dshHomePath('media-studio')

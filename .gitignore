@@ -1,0 +1,17 @@
+﻿# build / deps
+node_modules/
+*/node_modules/
+miniPaint/miniPaint-master/dist/*.map
+
+# local QA logs (may contain access tokens)
+.qa/*.log
+*.log
+*.bak-*
+*-red.log
+
+# packaged artifacts (rebuild with pnpm pack / npm pack)
+plugin/dist/*.tgz
+
+# OS
+Thumbs.db
+.DS_Store
