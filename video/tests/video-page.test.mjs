@@ -55,15 +55,24 @@ test('page declares module scripts and local assets only', () => {
   assert.equal(/https?:\/\//.test(editorHtml.replace(/lang="zh-CN"/, '')), false);
   assert.equal(/https?:\/\//.test(css), false);
 });
-test('host wrapper talks only to the isolated relay and tool routes', () => {
-  assert.match(hostJs, /baseUrl: '\/video-relay', editorKind: 'video'/);
-  assert.match(hostJs, /fetch\('\/video-tools'/);
-  assert.match(hostJs, /fetch\('\/boot'/);
-  assert.equal(/fetch\('\/prototype-tools'/.test(hostJs), false);
+test('host wrapper talks only to the real plugin routes', () => {
+  assert.match(hostJs, /baseUrl: '\/media\/video-relay',\s+editorKind: 'video'/);
+  assert.match(hostJs, /fetch\('\/media\/boot'/);
+  assert.equal(/\/video-tools|['"]\/video-relay['"]|['"]\/boot['"]/.test(hostJs), false, '不得再用原型期的 /video-relay、/boot 或 /video-tools 路由');
+  assert.match(hostJs, /\/media\/host\/iframe-transport\.mjs/);
+  assert.match(hostJs, /\/media\/host\/browser-relay\.mjs/);
+});
+test('host wrapper auto-connects on load and answers the binding probe', () => {
+  assert.match(hostJs, /\$\('editor'\)\.addEventListener\('load'/, '必须在 iframe load 后自动连接');
+  assert.match(hostJs, /connectWithRetry/, '自动连接失败要重试再报错');
+  assert.match(hostJs, /media\.binding\.read/);
+  assert.match(hostJs, /media\.binding\.result/);
+  assert.match(hostJs, /editorKind: 'video', projectId: state\.documentId/, '绑定回执必须带 video 身份与真实文档');
 });
 test('page copy keeps the local-simulation boundary visible', () => {
   assert.match(editorHtml, /本地模拟/);
-  assert.match(hostHtml, /不是 DSH runtime 工具注册/);
+  assert.match(hostHtml, /真实插件路由/);
+  assert.match(hostHtml, /media_video_/);
 });
 
 test('every video module parses as ESM (node --check on .js misses this)', () => {
@@ -77,7 +86,7 @@ test('every video module parses as ESM (node --check on .js misses this)', () =>
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('page copy is valid UTF-8 Chinese text, not mojibake', () => {
-  for (const [file, text] of [['video.js', '正在载入视频…'], ['index.html', '视频剪辑工作台'], ['video-bridge.mjs', '缺少 commandId'], ['host.js', '本地 harness 预览'], ['host.html', '确认执行']]) {
+  for (const [file, text] of [['video.js', '正在载入视频…'], ['index.html', '视频剪辑工作台'], ['video-bridge.mjs', '缺少 commandId'], ['host.js', '已绑定 video relay'], ['host.html', 'DSH 协作宿主']]) {
     const content = readFileSync(resolve(root, file), 'utf8');
     assert.equal(/\uFFFD/.test(content), false, `${file} 含替换字符`);
     assert.ok(content.includes(text), `${file} 缺少中文串「${text}」`);
