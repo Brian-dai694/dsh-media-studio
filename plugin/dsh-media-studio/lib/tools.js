@@ -3,8 +3,14 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { MediaBridgeError } from './bridge.js';
 import {
-  HIGH_RISK_OPERATIONS, digestOf, requestHumanApproval, createSessionBindings, trustedSessionId,
+  HIGH_RISK_OPERATIONS, digestOf, requestHumanApproval, createSessionBindings, trustedSessionId, APPROVAL_WAIT_MS,
 } from './gate.js';
+
+// Host budget for a call that may wait for a human decision. It must sit above the
+// plugin's own APPROVAL_WAIT_MS so the structured APPROVAL_TIMEOUT wins instead of the
+// host's blunt TOOL_TIMEOUT, and it never applies to a plain media round trip, which
+// bridge.js still bounds at 10s. No media command is extended to an unbounded wait.
+const APPROVAL_BUDGET_MS = APPROVAL_WAIT_MS + 30_000;
 
 const RESULT_SCHEMA = {
   type: 'object',
@@ -215,7 +221,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
       if (args.bind === true) await bindings.authorize(exec, {
         editorKind: kind, instanceId: args.instanceId, projectId: args.projectId,
         readState: () => bridge.readState({ instanceId: args.instanceId, projectId: args.projectId }),
-        approve: reason => requestHumanApproval(ctx, { agent: exec.agent, toolName: `media_${kind}_read_state`, callId: exec.callId, reason, signal: exec.signal }),
+        approve: (reason, signal) => requestHumanApproval(ctx, { agent: exec.agent, toolName: `media_${kind}_read_state`, callId: exec.callId, reason, signal: signal ?? exec.signal }),
       });
       const state = await verify(kind, bridge, args, exec);
       return {
@@ -337,7 +343,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
     parameters: READ_PARAMS,
     output: { schema: RESULT_SCHEMA, render: renderReadState, presentationMeta },
     execute: readState('image', imageBridge),
-    timeoutMs: 10_000,
+    timeoutMs: APPROVAL_BUDGET_MS,
   }));
 
   register(defineTool({
@@ -346,6 +352,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
     parameters: WRITE_PARAMS('image'),
     output: { schema: RESULT_SCHEMA, render: renderSummary, presentationMeta },
     execute: applyCommand('image', imageBridge, 'media_image_apply_command'),
+    timeoutMs: APPROVAL_BUDGET_MS,
   }));
 
   register(defineTool({
@@ -363,7 +370,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
     parameters: READ_PARAMS,
     output: { schema: RESULT_SCHEMA, render: renderReadState, presentationMeta },
     execute: readState('video', videoBridge),
-    timeoutMs: 10_000,
+    timeoutMs: APPROVAL_BUDGET_MS,
   }));
 
   register(defineTool({
@@ -372,6 +379,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
     parameters: WRITE_PARAMS('video'),
     output: { schema: RESULT_SCHEMA, render: renderSummary, presentationMeta },
     execute: applyCommand('video', videoBridge, 'media_video_apply_command'),
+    timeoutMs: APPROVAL_BUDGET_MS,
   }));
 
   register(defineTool({
@@ -453,6 +461,7 @@ export function registerMediaTools(ctx, { imageBridge, videoBridge, approvals, b
     parameters: EXPORT_START_PARAMS('video'),
     output: { schema: RESULT_SCHEMA, render: renderSummary, presentationMeta },
     execute: startExport('video', videoBridge),
+    timeoutMs: 10_000,
   }));
 
   register(defineTool({

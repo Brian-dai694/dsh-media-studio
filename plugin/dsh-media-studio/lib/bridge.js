@@ -92,7 +92,17 @@ function validateVideoCommand(command) {
   const p = command.payload;
   if (!VIDEO_COMMANDS.has(command.type)) throw new MediaBridgeError('UNSUPPORTED_COMMAND', 'Command is not in the video allowlist.');
   if (!isObject(p)) throw new MediaBridgeError('INVALID_REQUEST', 'Command payload must be an object.');
-  if (command.type.startsWith('media.video.history.')) fieldsOnly(p, []);
+  // Guarded undo mirrors the image contract: `{}` is a plain undo, while
+  // targetCommandId + afterDigest must be supplied together. The editor then checks the
+  // original command, revision, digest and native history top before undoing.
+  if (command.type === 'media.video.history.undo') {
+    fieldsOnly(p, ['targetCommandId', 'afterDigest']);
+    if ((p.targetCommandId === undefined) !== (p.afterDigest === undefined)) {
+      throw new MediaBridgeError('INVALID_REQUEST', 'Guarded undo needs both targetCommandId and afterDigest, or neither.');
+    }
+    if (p.targetCommandId !== undefined) { opaqueId(p.targetCommandId, 'targetCommandId'); opaqueId(p.afterDigest, 'afterDigest'); }
+  }
+  if (command.type === 'media.video.history.redo') fieldsOnly(p, []);
   for (const key of ['startTime', 'duration', 'inTime', 'outTime']) {
     if (p[key] !== undefined) throw new MediaBridgeError('INVALID_REQUEST', `Use integer microseconds startUs/durationUs/inUs/outUs, not ${key}; 1 second = 1000000 microseconds.`);
   }

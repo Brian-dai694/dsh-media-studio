@@ -41,7 +41,9 @@ export function createSessionBindings({ resolvePage } = {}) {
         if (before.documentId !== projectId) fail('DOCUMENT_MISMATCH', 'Requested project does not match the editor.');
         const reason = `Authorize this session ${sessionId} to read, edit and export this exact editor project. editorKind=${editorKind}; documentId=${before.documentId}; instanceId=${instanceId}; pageId=${page.pageId}; revision=${before.revision}; digest=${before.stateDigest}. Destructive edits still require separate approval.`;
         checkActive();
-        const decision = await approve(reason);
+        // approve is the caller's bounded native approval wait; it must honor the signal
+        // so a host cancellation closes the pending approval instead of leaking it.
+        const decision = await approve(reason, signal);
         checkActive();
         if (!decision.allowed) fail(decision.code, decision.message);
         const after = await readState();
@@ -188,15 +190,51 @@ export function createApprovalStore({ ttlMs = TTL_MS, now = () => Date.now() } =
   };
 }
 
-/** Only `allowed-once` proceeds; every other outcome (including `unavailable`) is a denial. */
-export async function requestHumanApproval(ctx, { agent, toolName, callId, reason, signal }) {
+/**
+ * Plugin-side bound for a human decision. The host enforces `ToolDefinition.timeoutMs`
+ * over the whole call and turns expiry into TOOL_TIMEOUT, so the approval wait must be
+ * shorter than the tool budget (tools.js declares APPROVAL_WAIT_MS + headroom) and much
+ * longer than a media round trip (bridge.js keeps 10s). Not infinite, never auto-retried.
+ */
+export const APPROVAL_WAIT_MS = 5 * 60_000;
+
+/**
+ * Only `allowed-once` proceeds; every other outcome (including `unavailable`) is a denial.
+ * The wait is bounded: on expiry the approval signal is aborted (the host resolves it as
+ * `cancelled`), APPROVAL_TIMEOUT is returned, and a late grant can never reach the caller.
+ */
+export async function requestHumanApproval(ctx, { agent, toolName, callId, reason, signal, timeoutMs = APPROVAL_WAIT_MS }) {
   if (!ctx?.approval?.request) return { allowed: false, code: 'APPROVAL_UNAVAILABLE', message: 'Approval service is not available in this deployment.' };
-  let decision;
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener('abort', forwardAbort, { once: true });
+  let timedOut = false;
+  let expire;
+  const expired = new Promise(resolve => { expire = resolve; });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); expire(undefined); }, timeoutMs);
+  // Cancellation must win even when it lands before the native request is dispatched
+  // (then the host listener would never fire and the call would sit until the deadline).
+  const aborted = new Promise(resolve => {
+    const onAbort = () => resolve(undefined);
+    if (controller.signal.aborted) resolve(undefined);
+    else controller.signal.addEventListener('abort', onAbort, { once: true });
+  });
+  // A settlement that arrives after cancellation must not surface as this call's outcome.
+  const request = Promise.resolve()
+    .then(() => ctx.approval.request({ agent, toolName, callId, reason, signal: controller.signal }))
+    .then(decision => ({ decision }), error => ({ error }));
+  request.then(() => {}, () => {});
   try {
-    decision = await ctx.approval.request({ agent, toolName, callId, reason, signal });
-  } catch (error) {
-    return { allowed: false, code: 'APPROVAL_FAILED', message: error?.message || 'Approval request failed.' };
+    const settled = await Promise.race([request, expired, aborted]);
+    if (timedOut) return { allowed: false, code: 'APPROVAL_TIMEOUT', message: `No approval decision within ${Math.round(timeoutMs / 1000)}s; the request was cancelled. Ask the user to explicitly start a new approval.` };
+    if (!settled) return { allowed: false, code: 'APPROVAL_CANCELLED', message: 'Approval was cancelled; ask the user to explicitly start a new request.' };
+    if (settled.error) return { allowed: false, code: 'APPROVAL_FAILED', message: settled.error?.message || 'Approval request failed.' };
+    if (signal?.aborted) return { allowed: false, code: 'APPROVAL_CANCELLED', message: 'Approval was cancelled by the caller; ask the user to explicitly start a new request.' };
+    if (settled.decision !== 'allowed-once') return { allowed: false, code: 'APPROVAL_DENIED', message: `Approval outcome was ${String(settled.decision)}.` };
+    return { allowed: true };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', forwardAbort);
   }
-  if (decision !== 'allowed-once') return { allowed: false, code: 'APPROVAL_DENIED', message: `Approval outcome was ${String(decision)}.` };
-  return { allowed: true };
 }
