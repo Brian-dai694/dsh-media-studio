@@ -82,6 +82,20 @@ function drawOverlays() {
 function undoAction() { const before = readState(project(), history, instanceId, capabilities()); history = undo(history); const after = readState(project(), history, instanceId, capabilities()); if (before.stateDigest !== after.stateDigest) $('auditDigest').textContent = `${before.stateDigest} → ${after.stateDigest} · 撤销 R${before.revision}→R${after.revision} · 本地模拟`; render(); }
 function redoAction() { const before = readState(project(), history, instanceId, capabilities()); history = redo(history); const after = readState(project(), history, instanceId, capabilities()); if (before.stateDigest !== after.stateDigest) $('auditDigest').textContent = `${before.stateDigest} → ${after.stateDigest} · 重做 R${before.revision}→R${after.revision} · 本地模拟`; render(); }
 let attachedMediaRef = null;
+// MediaRecorder 产出的 WebM 头部没有时长，浏览器会报 Infinity；必须先跳到末尾让它解析出真实时长。
+function resolveMediaDuration(video) {
+  if (Number.isFinite(video.duration) && video.duration > 0) return Promise.resolve(video.duration);
+  return new Promise(resolve => {
+    const current = () => (Number.isFinite(video.duration) && video.duration > 0 ? video.duration : NaN);
+    const cleanup = () => { clearTimeout(timer); video.removeEventListener('durationchange', check); video.removeEventListener('timeupdate', check); };
+    const finish = value => { cleanup(); resolve(value); };
+    const check = () => { const value = current(); if (Number.isFinite(value)) finish(value); };
+    const timer = setTimeout(() => finish(current()), 4000);
+    video.addEventListener('durationchange', check);
+    video.addEventListener('timeupdate', check);
+    try { video.currentTime = 1e7; } catch { finish(NaN); }
+  });
+}
 function importVideo(file) {
   if (!file) return;
   const video = $('video');
@@ -94,9 +108,12 @@ function importVideo(file) {
   attachedMediaRef = ref;
   $('emptyStage').hidden = false;
   $('emptyStage').querySelector('strong').textContent = '正在载入视频…';
-  video.onloadedmetadata = () => {
+  video.onloadedmetadata = async () => {
     if (generation !== importGeneration) return;
-    if (!Number.isFinite(video.duration) || video.duration <= 0) { toast('视频时长无效，无法加入时间轴'); return; }
+    const duration = await resolveMediaDuration(video);
+    if (generation !== importGeneration) return;
+    if (!Number.isFinite(duration) || duration <= 0) { toast('视频时长无效，无法加入时间轴'); return; }
+    video.currentTime = 0;
     if (existing) {
       $('projectName').textContent = file.name.replace(/\.[^.]+$/, '');
       $('emptyStage').hidden = true;
@@ -105,7 +122,7 @@ function importVideo(file) {
       return;
     }
     const id = crypto.randomUUID();
-    apply({ type: 'media.video.clip.add', clip: { id, sourceRef: ref, name: file.name, duration: video.duration } });
+    apply({ type: 'media.video.clip.add', clip: { id, sourceRef: ref, name: file.name, duration } });
     $('projectName').textContent = file.name.replace(/\.[^.]+$/, '');
     $('emptyStage').hidden = true;
     probeCapabilities();
