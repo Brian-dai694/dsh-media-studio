@@ -159,10 +159,33 @@ window.__ModuleLoader__.load({
       sync()
       return off
     }
-    function retainedVisible(panelId, entryId, anchorId, node, rect) {
-      return panelId === entryId && anchorId === entryId && !!node && node.isConnected === true &&
-        (!node.checkVisibility || node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) &&
-        !!rect && rect.width > 0 && rect.height > 0
+    var EDITOR_IDS = ['media-image-editor', 'media-video-editor']
+    function isEditorPanel(panelId) { return EDITOR_IDS.indexOf(panelId) >= 0 }
+    /** Measured box, or null while the node is absent or not laid out yet. */
+    function measureRect(node) {
+      if (!node || node.isConnected !== true || typeof node.getBoundingClientRect !== 'function') return null
+      try {
+        var r = node.getBoundingClientRect()
+        return r && r.width > 0 && r.height > 0 ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
+      } catch (_) { return null }
+    }
+    /**
+     * The live anchor for the active panel. A navigation away unmounts the keyed main
+     * panel and a return mounts a fresh one, so a cached node can be detached: fall back
+     * to the marker the anchor renders, never to a cached detached node.
+     */
+    function resolveAnchor(node, nodeId, panelId) {
+      if (!isEditorPanel(panelId)) return null
+      if (node && node.isConnected === true && nodeId === panelId) return node
+      if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return null
+      try {
+        var found = document.querySelector('[data-media-anchor="' + panelId + '"]')
+        return found && found.isConnected === true ? found : null
+      } catch (_) { return null }
+    }
+    /** Visible only when the host says this panel is active and its anchor is laid out. */
+    function retainedVisible(panelId, entryId, node, rect) {
+      return panelId === entryId && !!node && node.isConnected === true && !!rect && rect.width > 0 && rect.height > 0
     }
     function releaseHiddenFocus(node, visible) {
       if (!visible && node && node.contains(document.activeElement)) document.activeElement?.blur?.()
@@ -501,22 +524,34 @@ window.__ModuleLoader__.load({
         var panelState = React.useState(null)
         React.useLayoutEffect(function () { return watchPanel(getLayout(), panelState[1]) }, [])
         var panelId = panelState[0]
+        var node = resolveAnchor(anchor, anchorId, panelId)
         var tick = React.useState(0), rectState = React.useState(null), visited = React.useRef(new Set())
         React.useLayoutEffect(function () { var fn = function () { tick[1](function (n) { return n+1 }) }; listeners.add(fn); fn(); return function () { listeners.delete(fn) } }, [])
+        // The host panel wins: returning to an editor clears the native-navigation gate even
+        // if the openSession click never reported back, so a stale gate cannot blank the pane.
         React.useLayoutEffect(function () {
-          if (!anchor) { rectState[1](null); return }
-          var current = anchor
-          function measure() { if (anchor !== current) return; var r = current.getBoundingClientRect(); rectState[1]({left:r.left,top:r.top,width:r.width,height:r.height}) }
+          if (isEditorPanel(panelId) && navigation.isNative()) navigation.enterEditor()
+        }, [panelId])
+        React.useLayoutEffect(function () {
+          if (!node) { rectState[1](null); return }
+          var current = node, cancelled = false
+          function measure() { if (cancelled || !current.isConnected) return; rectState[1](measureRect(current)) }
           measure()
           var observer = new ResizeObserver(measure); observer.observe(current)
           window.addEventListener('resize', measure)
-          return function () { observer.disconnect(); window.removeEventListener('resize', measure) }
-        }, [anchor, anchorId, panelId])
-        if (panelId && panelId === anchorId) visited.current.add(panelId)
-        var rect = rectState[0]
+          // A fresh anchor is laid out after our render, so re-measure on the next frames.
+          var raf = requestAnimationFrame(measure)
+          var timers = [setTimeout(measure, 50), setTimeout(measure, 250)]
+          return function () {
+            cancelled = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout)
+            observer.disconnect(); window.removeEventListener('resize', measure)
+          }
+        }, [node, panelId])
+        if (isEditorPanel(panelId)) visited.current.add(panelId)
+        var rect = rectState[0] || measureRect(node)
         return React.createElement(React.Fragment, null, ENTRIES.map(function (entry, index) {
           if (!visited.current.has(entry.id)) return null
-          var visible = !navigation.isNative() && retainedVisible(panelId, entry.id, anchorId, anchor, rect)
+          var visible = !navigation.isNative() && retainedVisible(panelId, entry.id, node, rect)
           return React.createElement(RetainedLayer, {key:entry.id, entry:entry, page:pages[index], visible:visible, rect:rect})
         }))
       }
@@ -552,7 +587,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply
     exports.entries = ENTRIES
     // Exposed for the contract tests; the host only consumes name/inject/apply.
-    exports.chat = { undoPrompt: undoPrompt, resultIssue: resultIssue, watchPanel: watchPanel, retainedVisible: retainedVisible, releaseHiddenFocus: releaseHiddenFocus, makePage: makePage, openNativeSession: openNativeSession, approvalText: approvalText, makeTranscript: makeTranscript, bindingKey: bindingKey, sendPrompt: sendPrompt, textOfEvent: textOfEvent, followSession: followSession, promptBody: promptBody }
+    exports.chat = { undoPrompt: undoPrompt, resultIssue: resultIssue, watchPanel: watchPanel, retainedVisible: retainedVisible, measureRect: measureRect, resolveAnchor: resolveAnchor, isEditorPanel: isEditorPanel, releaseHiddenFocus: retainedVisible, releaseHiddenFocus: releaseHiddenFocus, makePage: makePage, openNativeSession: openNativeSession, approvalText: approvalText, makeTranscript: makeTranscript, bindingKey: bindingKey, sendPrompt: sendPrompt, textOfEvent: textOfEvent, followSession: followSession, promptBody: promptBody }
     return module.exports
   },
 })

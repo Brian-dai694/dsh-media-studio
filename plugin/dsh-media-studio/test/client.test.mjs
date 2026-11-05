@@ -278,21 +278,42 @@ test('retained editors follow host panel navigation, hide native conversation an
     getSnapshot: () => ({activePanelId}),
     subscribe(fn) { listener = fn; return () => {disposed = true;}; }
   } }, id => observed.push(id));
-  const node = {isConnected:true, checkVisibility:()=>true};
+  const node = {isConnected:true};
   const rect = {width:100,height:100};
-  const visible = entry => client.chat.retainedVisible(observed.at(-1), entry, 'media-image-editor', node, rect);
+  const visible = entry => client.chat.retainedVisible(observed.at(-1), entry, node, rect);
   assert.equal(visible('media-image-editor'), true);
   for (const panel of [null, 'plugins', 'media-video-editor']) {
     activePanelId = panel; listener();
     assert.equal(visible('media-image-editor'), false, 'stale anchor must never cover another panel');
   }
   activePanelId = 'media-image-editor'; listener();
-  assert.equal(visible('media-image-editor'), true);
-  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, 'media-video-editor', node, rect), false);
-  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, activePanelId, {...node,isConnected:false}, rect), false);
-  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, activePanelId, {...node,checkVisibility:()=>false}, rect), false);
+  assert.equal(visible('media-image-editor'), true, 'returning to the editor must restore the pane');
+  assert.equal(client.chat.retainedVisible(activePanelId, 'media-video-editor', node, rect), false);
+  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, {...node,isConnected:false}, rect), false);
+  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, node, {width:0,height:0}), false);
+  assert.equal(client.chat.retainedVisible(activePanelId, activePanelId, null, rect), false);
+  assert.equal(client.chat.isEditorPanel('media-image-editor'), true);
+  assert.equal(client.chat.isEditorPanel('plugins'), false);
   stop(); assert.equal(disposed, true);
   client.chat.watchPanel({}, id => assert.equal(id, null));
+});
+
+test('a detached cached anchor is replaced by the live panel anchor instead of blanking the pane', async () => {
+  const client = await loadClient();
+  const detached = {isConnected:false};
+  const live = {isConnected:true, dataset:{mediaAnchor:'media-image-editor'}};
+  globalThis.document = {querySelector: sel => sel === '[data-media-anchor="media-image-editor"]' ? live : null};
+  assert.equal(client.chat.resolveAnchor(detached, 'media-image-editor', 'media-image-editor'), live);
+  assert.equal(client.chat.resolveAnchor(live, 'media-image-editor', 'media-image-editor'), live);
+  assert.equal(client.chat.resolveAnchor(detached, 'media-image-editor', 'plugins'), null, 'no anchor for a non-editor panel');
+  globalThis.document = {querySelector: () => null};
+  assert.equal(client.chat.resolveAnchor(detached, 'media-image-editor', 'media-image-editor'), null);
+  delete globalThis.document;
+  assert.equal(client.chat.resolveAnchor(detached, 'media-image-editor', 'media-image-editor'), null, 'no DOM means no claim');
+  assert.equal(client.chat.measureRect(null), null);
+  assert.deepEqual(client.chat.measureRect({isConnected:true, getBoundingClientRect:()=>({left:1,top:2,width:640,height:480})}), {left:1,top:2,width:640,height:480});
+  assert.equal(client.chat.measureRect({isConnected:true, getBoundingClientRect:()=>({width:0,height:0})}), null);
+  assert.equal(client.chat.measureRect({isConnected:false, getBoundingClientRect:()=>({width:9,height:9})}), null);
 });
 
 test('hidden retained layer releases owned focus without blurring other panels', async () => {
@@ -323,9 +344,9 @@ test('video results retain command evidence and expose history conflicts without
 });
 
 test('video panel visibility uses the same host navigation contract as images', async () => {
-  const client = await loadClient(), node = {isConnected:true,checkVisibility:()=>true}, rect = {width:640,height:480};
-  assert.equal(client.chat.retainedVisible('media-video-editor','media-video-editor','media-video-editor',node,rect),true);
-  for (const id of [null,'plugins','media-image-editor']) assert.equal(client.chat.retainedVisible(id,'media-video-editor','media-video-editor',node,rect),false);
+  const client = await loadClient(), node = {isConnected:true}, rect = {width:640,height:480};
+  assert.equal(client.chat.retainedVisible('media-video-editor','media-video-editor',node,rect),true);
+  for (const id of [null,'plugins','media-image-editor']) assert.equal(client.chat.retainedVisible(id,'media-video-editor',node,rect),false);
 });
 
 test('a missing slots service degrades instead of throwing', async () => {
