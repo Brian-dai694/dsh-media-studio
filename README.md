@@ -1,4 +1,4 @@
-﻿# DSH Media Studio — 图片 / 视频人机协作编辑器
+# DSH Media Studio — 图片 / 视频人机协作编辑器
 
 DeepSeek Harness 插件原型：左侧原生编辑器（图片用 miniPaint，视频用原生 video/Canvas），
 右侧是**真实 DSH 会话**（`ctx.remote.session.prompt/follow`），人和 Agent 共享同一份原生工程状态。
@@ -27,14 +27,27 @@ DeepSeek Harness 插件原型：左侧原生编辑器（图片用 miniPaint，�
 # 插件
 cd plugin/dsh-media-studio && pnpm install && node --test test/*.test.mjs
 
+# 视频编辑器（状态 / 桥 / 页面 / 打包一致性）
+cd video && node tests/video-bridge.test.mjs && node tests/video-state.test.mjs \
+  && node tests/video-page.test.mjs && node tests/video-package.test.mjs
+
 # miniPaint 图片页
 cd miniPaint/miniPaint-master && npm install && npm run build
 ```
 
 打包产物（`plugin/dist/*.tgz`）与 `node_modules` 不入库。
 
+## 视频导出格式
+
+导出走单 Canvas 合成 + `MediaRecorder`：把源画面（按裁切区间）、处于 `[start, end)` 的文字/图片叠加，
+以及源音轨合成一条流，录制为 **WebM**；无音轨素材会如实标注「素材无音轨」。
+
+**MP4 未验证，暂不可用**：页面显示「MP4 未验证」，导出工具收到 `format=mp4` 会返回
+`EXPORT_FORMAT_UNAVAILABLE`，不会静默降级或谎报成功。
+
 ## 已知限制
 
-- 视频导出音画合成、工程重开与媒体重连仍需真实媒体验收。
+- 视频导出（音画合成、真实播放校验）、工程重开与媒体重连仍需真实媒体验收；当前只有静态与桥级测试证据。
+- 媒体不嵌入工程快照，重开工程需重新选择同一源视频（按 `sourceRef` 自动重连，不新建片段）。
 - 审批等待受宿主工具超时约束，修复后需重新发起一次授权。
 - 部分能力（极简布局、结果卡撤销按钮）默认关闭，待验收后开放。

@@ -2,16 +2,20 @@
 // The parent page owns the relay; this module only serves the transferred MessagePort,
 // validates the envelope and forwards structured commands to the editor state source.
 
-const CORE_TYPES = new Set(['editor.read_state', 'editor.apply_command', 'editor.get_command_result']);
+const CORE_TYPES = new Set(['editor.read_state', 'editor.apply_command', 'editor.get_command_result', 'editor.export_start', 'editor.export_status']);
 const US = 1_000_000;
 const toSeconds = value => Number(value) / US;
 const failure = (code, message, details = {}) => Object.assign(new Error(message), { code, ...details });
 const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
+const payloadTarget = p => !!(p?.targetCommandId || p?.afterDigest);
 
 export function toEditorCommand(command) {
   if (!isObject(command) || typeof command.type !== 'string' || !isObject(command.payload)) throw failure('UNSUPPORTED_COMMAND', '命令不是结构化的视频命令');
   const p = command.payload;
   switch (command.type) {
+    case 'media.video.history.undo':
+    case 'media.video.history.redo':
+      return { type: command.type };
     case 'media.video.clip.add':
       if (typeof p.sourceRef !== 'string' || !p.sourceRef) throw failure('INVALID_REQUEST', '缺少 sourceRef');
       return { type: 'media.video.clip.add', clip: { id: p.clipId || null, sourceRef: p.sourceRef, name: p.name || p.sourceRef, duration: toSeconds(Math.max(Number(p.outUs) || 0, Number(p.inUs) || 0)), in: toSeconds(Number(p.inUs) || 0), out: toSeconds(Number(p.outUs) || 0) } };
@@ -32,7 +36,7 @@ export function toEditorCommand(command) {
 }
 
 export function createEditorBridge({ instanceId, getState, applyCommand, getCommandResult = null,
-  targetWindow = globalThis, expectedOrigin = null }) {
+  exportStart = null, exportStatus = null, targetWindow = globalThis, expectedOrigin = null }) {
   if (typeof instanceId !== 'string' || !instanceId) throw new TypeError('instanceId is required');
   if (typeof getState !== 'function' || typeof applyCommand !== 'function') throw new TypeError('getState/applyCommand are required');
   const completed = new Map();
@@ -59,14 +63,21 @@ export function createEditorBridge({ instanceId, getState, applyCommand, getComm
     const operation = (async () => {
       const editorCommand = toEditorCommand(message.command);
       const beforeIds = objectIds(state);
-      const result = applyCommand(editorCommand);
+      const targeted = message.command.type === 'media.video.history.undo' && payloadTarget(message.command.payload);
+      if (targeted) {
+        const p = message.command.payload;
+        const original = completed.get(p.targetCommandId);
+        if (!original || original.revision !== state.revision || original.afterDigest !== state.stateDigest || p.afterDigest !== state.stateDigest || state.history?.topCommandId !== p.targetCommandId) throw failure('HISTORY_CONFLICT', '后续修改或历史栈已变化，不能定向撤销');
+      }
+      const result = await applyCommand(editorCommand, { commandId: key });
       const after = getState();
+      if (after.documentId !== state.documentId || after.revision !== state.revision + 1) throw failure('AUDIT_MISMATCH', '写入后工程或修订不符合单次提交约定', { outcomeUnknown: true });
       const afterIds = objectIds(after);
       const payload = message.command.payload || {};
       const changed = new Set([...(result?.changedObjectIds || []), payload.clipId, payload.overlayId].filter(Boolean));
       for (const id of afterIds) if (!beforeIds.has(id)) changed.add(id);
       for (const id of beforeIds) if (!afterIds.has(id)) changed.add(id);
-      const output = { editorKind: 'video', documentId: after.documentId, commandId: key, revision: after.revision, changedObjectIds: [...changed] };
+      const output = { editorKind: 'video', documentId: after.documentId, commandId: key, revision: after.revision, appliedRevision: after.revision, afterDigest: after.stateDigest, changedObjectIds: [...changed] };
       completed.set(key, output);
       return output;
     })();
@@ -78,6 +89,14 @@ export function createEditorBridge({ instanceId, getState, applyCommand, getComm
     if (!isObject(message) || typeof message.requestId !== 'string' || !message.requestId) throw failure('INVALID_REQUEST', '缺少 requestId');
     if (!CORE_TYPES.has(message.type)) throw failure('INVALID_REQUEST', '不支持此消息类型');
     if (message.type === 'editor.read_state') return getState();
+    if (message.type === 'editor.export_start' || message.type === 'editor.export_status') {
+      const state = getState();
+      if (message.editorInstanceId !== instanceId || message.documentId !== state.documentId) throw failure('DOCUMENT_MISMATCH', '导出目标工程不匹配');
+      const handler = message.type === 'editor.export_start' ? exportStart : exportStatus;
+      if (typeof handler !== 'function') throw failure('EXPORT_UNAVAILABLE', '当前编辑器尚不支持此导出');
+      if (message.type === 'editor.export_start' && message.expectedRevision !== state.revision) throw failure('REVISION_CONFLICT', '导出前工程已变化');
+      return handler(message);
+    }
     if (message.type === 'editor.get_command_result') {
       if (typeof message.commandId !== 'string' || !message.commandId) throw failure('INVALID_REQUEST', '缺少 commandId');
       if (typeof getCommandResult === 'function') return getCommandResult(message.commandId);

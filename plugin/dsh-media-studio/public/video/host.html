@@ -33,10 +33,10 @@
 <body>
   <header>
     <h1>视频插件 · 本地协作宿主</h1>
-    <span class="tag">DSH 视频编辑器 · 自动连接协作中继</span>
+    <span class="tag">本地 harness · 不是 DSH runtime 工具注册</span>
   </header>
   <main>
-    <div class="stage"><iframe id="editor" src="/media/video/" title="视频编辑器"></iframe></div>
+    <div class="stage"><iframe id="editor" src="/video/" title="视频编辑器"></iframe></div>
     <aside>
       <section class="panel">
         <h2>连接</h2>
@@ -44,12 +44,18 @@
         <p class="status" id="status">未连接。编辑器状态仍由页面自身持有。</p>
       </section>
       <section class="panel">
-        <h2>写入入口</h2>
-        <p class="note">本页不提供写按钮。所有写入由模型通过 <code>media_video_apply_command</code> 发起，携带 <code>expectedRevision</code> 与幂等 <code>commandId</code>；高风险操作先返回 pending，再由用户在 DSH 审批后带 <code>approvalId</code> 重试。</p>
+        <h2>读取 / 预览</h2>
+        <div class="row"><button id="read">读取工程状态</button><button id="query">查询原命令结果</button></div>
+        <input type="text" id="text" value="片头字幕" aria-label="叠加文字" style="margin-top:8px">
+        <div class="row" style="margin-top:8px"><button id="prepare">生成意图预览</button><button id="approve" disabled>确认执行</button></div>
+      </section>
+      <section class="panel">
+        <h2>结果</h2>
+        <pre id="output">尚未调用本地 Host 工具。</pre>
       </section>
       <section class="panel">
         <h2>边界</h2>
-        <p class="note">本页只做一件事：把编辑器实例注册到插件的 <code>/media/video-relay</code>。媒体字节留在编辑器内，不经过中继；越权或未知结果一律不重放。</p>
+        <p class="note">本页只调用隔离原型的 <code>/video-relay</code> 与 <code>/video-tools</code>。媒体字节留在编辑器内，不经过中继；未注册到真实 DSH runtime，越权或未知结果一律不重放。</p>
       </section>
     </aside>
   </main>

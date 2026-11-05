@@ -69,7 +69,7 @@ test('page copy keeps the local-simulation boundary visible', () => {
 test('every video module parses as ESM (node --check on .js misses this)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'video-esm-'));
   try {
-    for (const file of ['video.js', 'host.js', 'video-state.mjs', 'video-bridge.mjs', 'video-capabilities.mjs']) {
+    for (const file of ['video.js', 'host.js', 'video-state.mjs', 'video-bridge.mjs', 'video-capabilities.mjs', 'video-export.mjs']) {
       const target = join(dir, file.replace(/\.js$/, '.mjs'));
       writeFileSync(target, readFileSync(resolve(root, file)));
       assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', target], { stdio: 'pipe' }), `${file} 不是合法 ESM`);
